@@ -1,9 +1,5 @@
 python-telegram-bot==20.7
-matplotlib==3.5.3 --only-binary=matplotlib
-numpy==1.21.6 --only-binary=numpy
+matplotlib==3.7.2
+numpy==1.24.3
 python-dateutil==2.8.2
-Pillow==9.5.0
-cycler==0.11.0
-kiwisolver==1.4.4
-pyparsing==3.0.9
-fonttools==4.38.0
+Pillow==10.0.0
