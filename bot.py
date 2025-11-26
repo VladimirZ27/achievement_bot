@@ -1,13 +1,10 @@
 import logging
 import sqlite3
-import matplotlib
-matplotlib.use('Agg')  # Важно для серверов без GUI
-import matplotlib.pyplot as plt
-import io
 import os
+import io
 from datetime import date, datetime
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import database
 import config
 
@@ -17,6 +14,18 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Попытка импорта matplotlib с обработкой ошибок
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Важно для серверов без GUI
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+    logger.info("Matplotlib успешно загружен")
+except ImportError as e:
+    logger.warning(f"Matplotlib не удалось загрузить: {e}")
+    MATPLOTLIB_AVAILABLE = False
+    plt = None
 
 # Ежедневные цели
 DAILY_GOALS = {
@@ -31,7 +40,7 @@ DAILY_GOALS = {
 # Глобальная переменная для отслеживания подтверждения отказа
 challenge_confirmations = {}
 
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Приветствие и главное меню"""
     user = update.effective_user
     user_id = user.id
@@ -51,7 +60,7 @@ def start(update: Update, context: CallbackContext):
     today = date.today()
     
     # Получаем прогресс за сегодня
-    progress_message = get_daily_progress(user_id, today)
+    progress_message = await get_daily_progress(user_id, today)
     
     # Сообщение о дне челленджа
     challenge_text = ""
@@ -67,9 +76,9 @@ def start(update: Update, context: CallbackContext):
         f"{progress_message}"
     )
     
-    update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-def get_daily_progress(user_id: int, today: date):
+async def get_daily_progress(user_id: int, today: date):
     """Получить прогресс по ежедневным целям"""
     conn = sqlite3.connect('achievements.db')
     cur = conn.cursor()
@@ -101,7 +110,7 @@ def get_daily_progress(user_id: int, today: date):
     
     return progress_text
 
-def handle_message(update: Update, context: CallbackContext):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка всех нажатий на кнопки"""
     user_input = update.message.text
     user_id = update.effective_user.id
@@ -112,7 +121,7 @@ def handle_message(update: Update, context: CallbackContext):
         if user_input == "✅ Да, отказаться":
             database.deactivate_challenge(user_id)
             del challenge_confirmations[user_id]
-            update.message.reply_text(
+            await update.message.reply_text(
                 "🎯 Челендж завершен! Твои баллы сохранены, но счетчик дней остановлен.\n"
                 "Ты всегда можешь начать новый челлендж!",
                 reply_markup=ReplyKeyboardMarkup([['/start']], resize_keyboard=True)
@@ -120,65 +129,65 @@ def handle_message(update: Update, context: CallbackContext):
             return
         elif user_input == "❌ Нет, продолжить":
             del challenge_confirmations[user_id]
-            start(update, context)
+            await start(update, context)
             return
     
     if user_input == "💪 Тело":
         keyboard = [['🚶 10.000 шагов', '💪 Тренировка'], ['← Назад']]
-        show_menu(update, "Что выполнил для тела?", keyboard)
+        await show_menu(update, "Что выполнил для тела?", keyboard)
     
     elif user_input == "🧠 Разум":
         keyboard = [['📚 Книга 30 мин', '🀅 Китайский'], ['📝 Диссертация', '← Назад']]
-        show_menu(update, "Что выполнил для разума?", keyboard)
+        await show_menu(update, "Что выполнил для разума?", keyboard)
     
     elif user_input == "🧘 Медитация":
         database.add_achievement(user_id, 'mind', 'meditation', 5)
-        send_achievement_response(update, user_id, "медитацию", 5)
+        await send_achievement_response(update, user_id, "медитацию", 5)
     
     elif user_input == "🀅 Китайский":
         keyboard = [['🀅 1 час', '🀅 2 часа'], ['← Назад']]
-        show_menu(update, "Сколько времени уделил китайскому?", keyboard)
+        await show_menu(update, "Сколько времени уделил китайскому?", keyboard)
     
     elif user_input == "📊 Статистика":
-        show_stats_menu(update, user_id)
+        await show_stats_menu(update, user_id)
     
     elif user_input == "🔧 Управление челленджем":
-        show_challenge_management(update, user_id)
+        await show_challenge_management(update, user_id)
     
     # Обработка достижений
     elif user_input == "🚶 10.000 шагов":
         database.add_achievement(user_id, 'body', 'steps', 10)
-        send_achievement_response(update, user_id, "10.000 шагов", 10)
+        await send_achievement_response(update, user_id, "10.000 шагов", 10)
     
     elif user_input == "💪 Тренировка":
         database.add_achievement(user_id, 'body', 'workout', 10)
-        send_achievement_response(update, user_id, "тренировку", 10)
+        await send_achievement_response(update, user_id, "тренировку", 10)
     
     elif user_input == "📚 Книга 30 мин":
         database.add_achievement(user_id, 'mind', 'reading', 5)
-        send_achievement_response(update, user_id, "чтение 30 минут", 5)
+        await send_achievement_response(update, user_id, "чтение 30 минут", 5)
     
     elif user_input == "🀅 1 час":
         database.add_achievement(user_id, 'mind', 'chinese', 10)
-        send_achievement_response(update, user_id, "китайский язык (1 час)", 10)
+        await send_achievement_response(update, user_id, "китайский язык (1 час)", 10)
     
     elif user_input == "🀅 2 часа":
         database.add_achievement(user_id, 'mind', 'chinese', 20)
-        send_achievement_response(update, user_id, "китайский язык (2 часа)", 20)
+        await send_achievement_response(update, user_id, "китайский язык (2 часа)", 20)
     
     elif user_input == "📝 Диссертация":
         database.add_achievement(user_id, 'mind', 'thesis', 10)
-        send_achievement_response(update, user_id, "страницу диссертации", 10)
+        await send_achievement_response(update, user_id, "страницу диссертации", 10)
     
     elif user_input == "← Назад":
-        start(update, context)
+        await start(update, context)
     
     # Обработка управления челленджем
     elif user_input == "❌ Отказаться от челленджа":
         challenge_confirmations[user_id] = True
         keyboard = [['✅ Да, отказаться', '❌ Нет, продолжить']]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        update.message.reply_text(
+        await update.message.reply_text(
             "⚠️ Вы уверены, что хотите отказаться от челленджа?\n\n"
             "📊 Ваши баллы сохранятся, но счетчик дней остановится.\n"
             "Это действие нельзя отменить!",
@@ -188,18 +197,18 @@ def handle_message(update: Update, context: CallbackContext):
     
     # Обработка меню статистики
     elif user_input == "📈 Статистика за сегодня":
-        show_today_stats(update, user_id)
+        await show_today_stats(update, user_id)
     
     elif user_input == "📅 История за месяц":
-        show_month_history(update, user_id)
+        await show_month_history(update, user_id)
     
     elif user_input == "📊 График прогресса":
-        generate_progress_chart(update, user_id)
+        await generate_progress_chart(update, user_id)
     
     elif user_input == "💰 Общий итог за месяц":
-        show_month_total(update, user_id)
+        await show_month_total(update, user_id)
 
-def show_challenge_management(update: Update, user_id: int):
+async def show_challenge_management(update: Update, user_id: int):
     """Показать меню управления челленджем"""
     challenge_day = database.get_challenge_day(user_id)
     
@@ -215,9 +224,9 @@ def show_challenge_management(update: Update, user_id: int):
         
         keyboard = [['← Назад']]
     
-    show_menu(update, message, keyboard)
+    await show_menu(update, message, keyboard)
 
-def send_achievement_response(update: Update, user_id: int, achievement_name: str, points: int):
+async def send_achievement_response(update: Update, user_id: int, achievement_name: str, points: int):
     """Отправить ответ о достижении и обновленный прогресс"""
     today = date.today()
     
@@ -225,21 +234,28 @@ def send_achievement_response(update: Update, user_id: int, achievement_name: st
     challenge_text = f"🎯 День {challenge_day}\n" if challenge_day else "🎯 Челендж завершен\n"
     
     achievement_message = f"🎉 За {achievement_name} +{points} баллов!\n{challenge_text}"
-    progress_message = get_daily_progress(user_id, today)
+    progress_message = await get_daily_progress(user_id, today)
     
     full_message = f"{achievement_message}\n{progress_message}"
-    update.message.reply_text(full_message)
+    await update.message.reply_text(full_message)
 
-def show_stats_menu(update: Update, user_id: int):
+async def show_stats_menu(update: Update, user_id: int):
     """Показать меню статистики"""
-    keyboard = [
-        ['📈 Статистика за сегодня', '📅 История за месяц'],
-        ['📊 График прогресса', '💰 Общий итог за месяц'],
-        ['← Назад']
-    ]
-    show_menu(update, "📊 Выбери тип статистики:", keyboard)
+    if MATPLOTLIB_AVAILABLE:
+        keyboard = [
+            ['📈 Статистика за сегодня', '📅 История за месяц'],
+            ['📊 График прогресса', '💰 Общий итог за месяц'],
+            ['← Назад']
+        ]
+    else:
+        keyboard = [
+            ['📈 Статистика за сегодня', '📅 История за месяц'],
+            ['💰 Общий итог за месяц', '← Назад']
+        ]
+    
+    await show_menu(update, "📊 Выбери тип статистики:", keyboard)
 
-def show_today_stats(update: Update, user_id: int):
+async def show_today_stats(update: Update, user_id: int):
     """Показать статистику за сегодня"""
     conn = sqlite3.connect('achievements.db')
     cur = conn.cursor()
@@ -267,9 +283,9 @@ def show_today_stats(update: Update, user_id: int):
         category_name = "Тело" if category == 'body' else "Разум"
         message += f"{emoji} {category_name}: {points} баллов\n"
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
-def show_month_history(update: Update, user_id: int):
+async def show_month_history(update: Update, user_id: int):
     """Показать историю за месяц"""
     conn = sqlite3.connect('achievements.db')
     cur = conn.cursor()
@@ -286,7 +302,7 @@ def show_month_history(update: Update, user_id: int):
     conn.close()
     
     if not data:
-        update.message.reply_text("📅 В этом месяце еще нет достижений!")
+        await update.message.reply_text("📅 В этом месяце еще нет достижений!")
         return
     
     current_month = datetime.now().strftime('%B %Y')
@@ -296,9 +312,9 @@ def show_month_history(update: Update, user_id: int):
         formatted_date = datetime.strptime(entry_date, '%Y-%m-%d').strftime('%d.%m')
         message += f"{formatted_date}: {daily_points} баллов\n"
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
-def show_month_total(update: Update, user_id: int):
+async def show_month_total(update: Update, user_id: int):
     """Показать общий итог за месяц"""
     conn = sqlite3.connect('achievements.db')
     cur = conn.cursor()
@@ -313,13 +329,21 @@ def show_month_total(update: Update, user_id: int):
     conn.close()
     
     current_month = datetime.now().strftime('%B %Y')
-    update.message.reply_text(
+    await update.message.reply_text(
         f"💰 Всего в {current_month} набрано: {month_total} баллов!\n"
         f"Так держать! 💥"
     )
 
-def generate_progress_chart(update: Update, user_id: int):
+async def generate_progress_chart(update: Update, user_id: int):
     """Сгенерировать и отправить график прогресса"""
+    if not MATPLOTLIB_AVAILABLE:
+        await update.message.reply_text(
+            "❌ Функция графиков временно недоступна. "
+            "Мы работаем над исправлением! 🔧\n\n"
+            "А пока можешь посмотреть статистику в текстовом формате 📊"
+        )
+        return
+    
     try:
         conn = sqlite3.connect('achievements.db')
         cur = conn.cursor()
@@ -334,62 +358,64 @@ def generate_progress_chart(update: Update, user_id: int):
         
         data = cur.fetchall()
         
-        if not data:
-            update.message.reply_text("📊 Недостаточно данных для построения графика!")
+        if not data or len(data) < 2:
+            await update.message.reply_text("📊 Недостаточно данных для построения графика! Нужно как минимум 2 дня с достижениями.")
             conn.close()
             return
         
         dates = [datetime.strptime(row[0], '%Y-%m-%d').strftime('%d.%m') for row in data]
         points = [row[1] for row in data]
         
-        plt.figure(figsize=(10, 5))
-        plt.plot(dates, points, marker='o', linewidth=2, color='#FF6B6B')
-        plt.title('Прогресс за месяц', fontsize=14, fontweight='bold')
-        plt.xlabel('Дата')
-        plt.ylabel('Баллы')
+        # Создание графика
+        plt.figure(figsize=(10, 6))
+        plt.plot(dates, points, marker='o', linewidth=2, color='#FF6B6B', markersize=8)
+        plt.title('📈 Твой прогресс за месяц', fontsize=16, fontweight='bold', pad=20)
+        plt.xlabel('Дата', fontsize=12)
+        plt.ylabel('Баллы', fontsize=12)
         plt.xticks(rotation=45)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         
+        # Сохранение в буфер
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=80)
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         buf.seek(0)
         plt.close()
         
         conn.close()
         
-        update.message.reply_photo(
+        # Отправка графика
+        await update.message.reply_photo(
             photo=buf,
-            caption="📈 Твой прогресс за этот месяц!"
+            caption="🎯 Вот твой прогресс! Продолжай в том же духе! 💪"
         )
+        
     except Exception as e:
         logger.error(f"Ошибка при создании графика: {e}")
-        update.message.reply_text("❌ Произошла ошибка при создании графика")
+        await update.message.reply_text("❌ Извини, не удалось создать график. Попробуй позже!")
 
-def show_menu(update: Update, text: str, keyboard: list):
+async def show_menu(update: Update, text: str, keyboard: list):
     """Показать меню с кнопками"""
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    update.message.reply_text(text, reply_markup=reply_markup)
+    await update.message.reply_text(text, reply_markup=reply_markup)
 
 def main():
     """Основная функция для запуска бота"""
     # Инициализируем базу данных
     database.init_db()
     
-    # Создаем апдейтер
-    updater = Updater(config.BOT_TOKEN, use_context=True)
-    
-    # Получаем диспетчер для регистрации обработчиков
-    dp = updater.dispatcher
+    # Создаем приложение бота
+    application = Application.builder().token(config.BOT_TOKEN).build()
     
     # Добавляем обработчики команд
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Запускаем бота
     logger.info("Бот запущен! 🚀")
-    updater.start_polling()
-    updater.idle()
+    if not MATPLOTLIB_AVAILABLE:
+        logger.warning("Matplotlib недоступен - графики отключены")
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
