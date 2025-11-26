@@ -1,7 +1,6 @@
 import logging
 import sqlite3
 import os
-import io
 from datetime import date, datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -14,18 +13,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Попытка импорта matplotlib с обработкой ошибок
-try:
-    import matplotlib
-    matplotlib.use('Agg')  # Важно для серверов без GUI
-    import matplotlib.pyplot as plt
-    MATPLOTLIB_AVAILABLE = True
-    logger.info("Matplotlib успешно загружен")
-except ImportError as e:
-    logger.warning(f"Matplotlib не удалось загрузить: {e}")
-    MATPLOTLIB_AVAILABLE = False
-    plt = None
 
 # Ежедневные цели
 DAILY_GOALS = {
@@ -202,9 +189,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif user_input == "📅 История за месяц":
         await show_month_history(update, user_id)
     
-    elif user_input == "📊 График прогресса":
-        await generate_progress_chart(update, user_id)
-    
     elif user_input == "💰 Общий итог за месяц":
         await show_month_total(update, user_id)
 
@@ -241,18 +225,10 @@ async def send_achievement_response(update: Update, user_id: int, achievement_na
 
 async def show_stats_menu(update: Update, user_id: int):
     """Показать меню статистики"""
-    if MATPLOTLIB_AVAILABLE:
-        keyboard = [
-            ['📈 Статистика за сегодня', '📅 История за месяц'],
-            ['📊 График прогресса', '💰 Общий итог за месяц'],
-            ['← Назад']
-        ]
-    else:
-        keyboard = [
-            ['📈 Статистика за сегодня', '📅 История за месяц'],
-            ['💰 Общий итог за месяц', '← Назад']
-        ]
-    
+    keyboard = [
+        ['📈 Статистика за сегодня', '📅 История за месяц'],
+        ['💰 Общий итог за месяц', '← Назад']
+    ]
     await show_menu(update, "📊 Выбери тип статистики:", keyboard)
 
 async def show_today_stats(update: Update, user_id: int):
@@ -334,66 +310,6 @@ async def show_month_total(update: Update, user_id: int):
         f"Так держать! 💥"
     )
 
-async def generate_progress_chart(update: Update, user_id: int):
-    """Сгенерировать и отправить график прогресса"""
-    if not MATPLOTLIB_AVAILABLE:
-        await update.message.reply_text(
-            "❌ Функция графиков временно недоступна. "
-            "Мы работаем над исправлением! 🔧\n\n"
-            "А пока можешь посмотреть статистику в текстовом формате 📊"
-        )
-        return
-    
-    try:
-        conn = sqlite3.connect('achievements.db')
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT date, SUM(points) 
-            FROM achievements 
-            WHERE user_id = ? AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now')
-            GROUP BY date 
-            ORDER BY date
-        """, (user_id,))
-        
-        data = cur.fetchall()
-        
-        if not data or len(data) < 2:
-            await update.message.reply_text("📊 Недостаточно данных для построения графика! Нужно как минимум 2 дня с достижениями.")
-            conn.close()
-            return
-        
-        dates = [datetime.strptime(row[0], '%Y-%m-%d').strftime('%d.%m') for row in data]
-        points = [row[1] for row in data]
-        
-        # Создание графика
-        plt.figure(figsize=(10, 6))
-        plt.plot(dates, points, marker='o', linewidth=2, color='#FF6B6B', markersize=8)
-        plt.title('📈 Твой прогресс за месяц', fontsize=16, fontweight='bold', pad=20)
-        plt.xlabel('Дата', fontsize=12)
-        plt.ylabel('Баллы', fontsize=12)
-        plt.xticks(rotation=45)
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        # Сохранение в буфер
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-        buf.seek(0)
-        plt.close()
-        
-        conn.close()
-        
-        # Отправка графика
-        await update.message.reply_photo(
-            photo=buf,
-            caption="🎯 Вот твой прогресс! Продолжай в том же духе! 💪"
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка при создании графика: {e}")
-        await update.message.reply_text("❌ Извини, не удалось создать график. Попробуй позже!")
-
 async def show_menu(update: Update, text: str, keyboard: list):
     """Показать меню с кнопками"""
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -413,8 +329,6 @@ def main():
     
     # Запускаем бота
     logger.info("Бот запущен! 🚀")
-    if not MATPLOTLIB_AVAILABLE:
-        logger.warning("Matplotlib недоступен - графики отключены")
     application.run_polling()
 
 if __name__ == '__main__':
