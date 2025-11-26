@@ -3,17 +3,19 @@ import sqlite3
 import matplotlib.pyplot as plt
 import io
 import os
+import asyncio
 from datetime import date, datetime, time
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import database
 import config
 
-# Включаем логирование
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # Ежедневные цели
 DAILY_GOALS = {
@@ -365,6 +367,7 @@ async def show_menu(update: Update, text: str, keyboard: list):
     await update.message.reply_text(text, reply_markup=reply_markup)
 
 def main():
+    """Основная функция для запуска бота"""
     # Инициализируем базу данных
     database.init_db()
     
@@ -376,7 +379,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Запускаем бота
-    print("Бот запущен! 🚀")
+    logger.info("Бот запущен! 🚀")
     application.run_polling()
 
 if __name__ == '__main__':
