@@ -316,6 +316,26 @@ async def show_menu(update: Update, text: str, keyboard: list):
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(text, reply_markup=reply_markup)
 
+# HTTP сервер для проверки здоровья
+from aiohttp import web
+
+async def health_check(request):
+    """Простая проверка здоровья"""
+    return web.Response(text="Bot is running! ✅")
+
+async def start_http_server():
+    """Запуск HTTP сервера"""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 10000)))
+    await site.start()
+    logger.info("HTTP сервер запущен на порту %s", os.getenv('PORT', 10000))
+
 def main():
     """Основная функция для запуска бота"""
     # Инициализируем базу данных
@@ -328,8 +348,12 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запускаем бота
+    # Запускаем бота и HTTP сервер
     logger.info("Бот запущен! 🚀")
+    
+    # Запускаем в асинхронном режиме
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_http_server())
     application.run_polling()
 
 if __name__ == '__main__':
