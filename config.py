@@ -1,5 +1,6 @@
 import os
 
-# Получаем токен из переменных окружения (для Render)
-# Если переменной нет, используем значение по умолчанию (для разработки)
-BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не найден! Установите переменную окружения BOT_TOKEN")
