@@ -2,10 +2,11 @@ import logging
 import sqlite3
 import os
 import asyncio
+import signal
 from datetime import date, datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram.error import Conflict, NetworkError
+from telegram.error import Conflict
 import database
 import config
 
@@ -353,31 +354,46 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ошибок"""
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
-# HTTP сервер для проверки здоровья
-from aiohttp import web
+# Простой HTTP сервер без aiohttp
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-async def health_check(request):
-    """Простая проверка здоровья"""
-    return web.Response(text="Bot is running! ✅")
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health' or self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Bot is running! ✅')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        # Отключаем логирование запросов
+        pass
 
-async def start_http_server():
-    """Запуск HTTP сервера"""
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 10000)))
-    await site.start()
-    logger.info("HTTP сервер запущен на порту %s", os.getenv('PORT', 10000))
+def run_http_server():
+    """Запуск HTTP сервера в отдельном потоке"""
+    port = int(os.getenv('PORT', 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    logger.info(f"HTTP сервер запущен на порту {port}")
+    server.serve_forever()
+
+def start_http_server_in_thread():
+    """Запуск HTTP сервера в отдельном потоке"""
+    import threading
+    thread = threading.Thread(target=run_http_server, daemon=True)
+    thread.start()
+    logger.info("HTTP сервер запущен в отдельном потоке")
 
 async def run_bot():
     """Запуск бота"""
     try:
         # Инициализируем базу данных
         database.init_db()
+        
+        # Запускаем HTTP сервер в отдельном потоке
+        start_http_server_in_thread()
         
         # Создаем приложение бота
         application = Application.builder().token(config.BOT_TOKEN).build()
@@ -389,9 +405,6 @@ async def run_bot():
         # Добавляем обработчик ошибок
         application.add_error_handler(error_handler)
         
-        # Запускаем HTTP сервер в фоне
-        asyncio.create_task(start_http_server())
-        
         # Запускаем бота
         logger.info("Бот запущен! 🚀")
         await application.run_polling()
@@ -399,13 +412,13 @@ async def run_bot():
     except Conflict as e:
         logger.warning(f"Конфликт: другой экземпляр бота уже запущен. Ждем 30 секунд...")
         await asyncio.sleep(30)
-        # Перезапускаем бота
+        # Перезапускаем бот
         await run_bot()
         
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}. Ждем 30 секунд и перезапускаем...")
         await asyncio.sleep(30)
-        # Перезапускаем бота
+        # Перезапускаем бот
         await run_bot()
 
 def main():
