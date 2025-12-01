@@ -2,9 +2,11 @@ import logging
 import sqlite3
 import os
 import asyncio
+import time
 from datetime import date, datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict, NetworkError
 import database
 import config
 
@@ -48,7 +50,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = date.today()
     
     # Получаем прогресс за сегодня
-    progress_message = await get_daily_progress(user_id, today)
+    progress_data = await get_daily_progress(user_id, today)
+    progress_message = progress_data[0]  # Берем только строку прогресса
     
     # Сообщение о дне челленджа
     challenge_text = ""
@@ -208,7 +211,10 @@ async def process_achievement(update: Update, user_id: int, category: str, achie
     await asyncio.sleep(0.5)
     
     # Сообщение 2: Обновленный прогресс и предложение продолжить
-    progress_message, completed_count, total_goals = await get_daily_progress(user_id, today)
+    progress_data = await get_daily_progress(user_id, today)
+    progress_message = progress_data[0]
+    completed_count = progress_data[1]
+    total_goals = progress_data[2]
     
     if completed_count == total_goals:
         # Все достижения выполнены
@@ -343,6 +349,11 @@ async def show_menu(update: Update, text: str, keyboard: list):
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(text, reply_markup=reply_markup)
 
+# Обработчики ошибок
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ошибок"""
+    logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
+
 # HTTP сервер для проверки здоровья
 from aiohttp import web
 
@@ -363,25 +374,72 @@ async def start_http_server():
     await site.start()
     logger.info("HTTP сервер запущен на порту %s", os.getenv('PORT', 10000))
 
+async def run_bot_with_retry():
+    """Запуск бота с повторными попытками при ошибках"""
+    max_retries = 5
+    retry_delay = 10  # секунды
+    
+    for attempt in range(max_retries):
+        try:
+            # Инициализируем базу данных
+            database.init_db()
+            
+            # Создаем приложение бота
+            application = Application.builder().token(config.BOT_TOKEN).build()
+            
+            # Добавляем обработчики команд
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            
+            # Добавляем обработчик ошибок
+            application.add_error_handler(error_handler)
+            
+            # Запускаем бота
+            logger.info(f"Запуск бота (попытка {attempt + 1}/{max_retries})...")
+            await application.run_polling()
+            
+        except Conflict as e:
+            logger.warning(f"Конфликт: другой экземпляр бота уже запущен. Попытка {attempt + 1}/{max_retries}")
+            if attempt < max_retries - 1:
+                logger.info(f"Повторная попытка через {retry_delay} секунд...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Экспоненциальная задержка
+            else:
+                logger.error("Достигнуто максимальное количество попыток. Завершение работы.")
+                raise
+                
+        except Exception as e:
+            logger.error(f"Критическая ошибка: {e}. Попытка {attempt + 1}/{max_retries}")
+            if attempt < max_retries - 1:
+                logger.info(f"Повторная попытка через {retry_delay} секунд...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                logger.error("Достигнуто максимальное количество попыток. Завершение работы.")
+                raise
+
 def main():
     """Основная функция для запуска бота"""
-    # Инициализируем базу данных
-    database.init_db()
+    logger.info("Запуск бота...")
     
-    # Создаем приложение бота
-    application = Application.builder().token(config.BOT_TOKEN).build()
-    
-    # Добавляем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Запускаем бота и HTTP сервер
-    logger.info("Бот запущен! 🚀")
-    
-    # Запускаем в асинхронном режиме
+    # Запускаем HTTP сервер и бота
     loop = asyncio.get_event_loop()
-    loop.create_task(start_http_server())
-    application.run_polling()
+    
+    # Создаем задачи для параллельного выполнения
+    tasks = [
+        loop.create_task(start_http_server()),
+        loop.create_task(run_bot_with_retry())
+    ]
+    
+    try:
+        # Запускаем все задачи
+        loop.run_until_complete(asyncio.gather(*tasks))
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"Критическая ошибка при запуске: {e}")
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
     main()
