@@ -2,7 +2,7 @@ import logging
 import sqlite3
 import os
 import asyncio
-import signal
+import sys
 from datetime import date, datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -356,6 +356,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Простой HTTP сервер без aiohttp
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -379,57 +380,71 @@ def run_http_server():
     logger.info(f"HTTP сервер запущен на порту {port}")
     server.serve_forever()
 
-def start_http_server_in_thread():
-    """Запуск HTTP сервера в отдельном потоке"""
-    import threading
-    thread = threading.Thread(target=run_http_server, daemon=True)
-    thread.start()
-    logger.info("HTTP сервер запущен в отдельном потоке")
-
 async def run_bot():
     """Запуск бота"""
-    try:
-        # Инициализируем базу данных
-        database.init_db()
-        
-        # Запускаем HTTP сервер в отдельном потоке
-        start_http_server_in_thread()
-        
-        # Создаем приложение бота
-        application = Application.builder().token(config.BOT_TOKEN).build()
-        
-        # Добавляем обработчики команд
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        # Добавляем обработчик ошибок
-        application.add_error_handler(error_handler)
-        
-        # Запускаем бота
-        logger.info("Бот запущен! 🚀")
-        await application.run_polling()
-        
-    except Conflict as e:
-        logger.warning(f"Конфликт: другой экземпляр бота уже запущен. Ждем 30 секунд...")
-        await asyncio.sleep(30)
-        # Перезапускаем бот
-        await run_bot()
-        
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}. Ждем 30 секунд и перезапускаем...")
-        await asyncio.sleep(30)
-        # Перезапускаем бот
-        await run_bot()
+    # Инициализируем базу данных
+    database.init_db()
+    
+    # Запускаем HTTP сервер в отдельном потоке
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+    logger.info("HTTP сервер запущен в отдельном потоке")
+    
+    # Создаем приложение бота
+    application = Application.builder().token(config.BOT_TOKEN).build()
+    
+    # Добавляем обработчики команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Добавляем обработчик ошибок
+    application.add_error_handler(error_handler)
+    
+    # Запускаем бота
+    logger.info("Бот запущен! 🚀")
+    await application.run_polling()
 
-def main():
+async def main():
     """Основная функция для запуска бота"""
-    # Запускаем бота в event loop
-    try:
-        asyncio.run(run_bot())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
-    except Exception as e:
-        logger.error(f"Критическая ошибка при запуске: {e}")
+    max_retries = 5
+    retry_count = 0
+    retry_delay = 30
+    
+    while retry_count < max_retries:
+        try:
+            await run_bot()
+        except Conflict as e:
+            logger.warning(f"Конфликт: другой экземпляр бота уже запущен. Ждем {retry_delay} секунд...")
+            retry_count += 1
+            if retry_count < max_retries:
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Экспоненциальная задержка
+            else:
+                logger.error(f"Достигнуто максимальное количество попыток ({max_retries})")
+                break
+        except KeyboardInterrupt:
+            logger.info("Бот остановлен пользователем")
+            break
+        except Exception as e:
+            logger.error(f"Критическая ошибка: {e}. Ждем {retry_delay} секунд и перезапускаем...")
+            retry_count += 1
+            if retry_count < max_retries:
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                logger.error(f"Достигнуто максимальное количество попыток ({max_retries})")
+                break
 
 if __name__ == '__main__':
-    main()
+    # Устанавливаем обработчик для корректного завершения
+    import signal
+    
+    def signal_handler(signum, frame):
+        logger.info("Получен сигнал завершения")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Запускаем бота
+    asyncio.run(main())
