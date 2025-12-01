@@ -85,10 +85,14 @@ async def get_daily_progress(user_id: int, today: date):
     progress_text = "📊 Ежедневные цели:\n\n"
     
     completed_percent = 0
+    total_goals = len(DAILY_GOALS)
+    completed_count = 0
+    
     for goal_id, goal_info in DAILY_GOALS.items():
         if goal_id in completed_tasks:
             status = "✅"
             completed_percent += goal_info['percent']
+            completed_count += 1
         else:
             status = "⭕"
         
@@ -96,7 +100,7 @@ async def get_daily_progress(user_id: int, today: date):
     
     progress_text += f"\n📈 Прогресс: {completed_percent}% выполнено"
     
-    return progress_text
+    return progress_text, completed_count, total_goals
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка всех нажатий на кнопки"""
@@ -129,8 +133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_menu(update, "Что выполнил для разума?", keyboard)
     
     elif user_input == "🧘 Медитация":
-        database.add_achievement(user_id, 'mind', 'meditation', 5)
-        await send_achievement_response(update, user_id, "медитацию", 5)
+        await process_achievement(update, user_id, 'mind', 'meditation', 5, "медитацию")
     
     elif user_input == "🀅 Китайский":
         keyboard = [['🀅 1 час', '🀅 2 часа'], ['← Назад']]
@@ -144,28 +147,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Обработка достижений
     elif user_input == "🚶 10.000 шагов":
-        database.add_achievement(user_id, 'body', 'steps', 10)
-        await send_achievement_response(update, user_id, "10.000 шагов", 10)
+        await process_achievement(update, user_id, 'body', 'steps', 10, "10.000 шагов")
     
     elif user_input == "💪 Тренировка":
-        database.add_achievement(user_id, 'body', 'workout', 10)
-        await send_achievement_response(update, user_id, "тренировку", 10)
+        await process_achievement(update, user_id, 'body', 'workout', 10, "тренировку")
     
     elif user_input == "📚 Книга 30 мин":
-        database.add_achievement(user_id, 'mind', 'reading', 5)
-        await send_achievement_response(update, user_id, "чтение 30 минут", 5)
+        await process_achievement(update, user_id, 'mind', 'reading', 5, "чтение 30 минут")
     
     elif user_input == "🀅 1 час":
-        database.add_achievement(user_id, 'mind', 'chinese', 10)
-        await send_achievement_response(update, user_id, "китайский язык (1 час)", 10)
+        await process_achievement(update, user_id, 'mind', 'chinese', 10, "китайский язык (1 час)")
     
     elif user_input == "🀅 2 часа":
-        database.add_achievement(user_id, 'mind', 'chinese', 20)
-        await send_achievement_response(update, user_id, "китайский язык (2 часа)", 20)
+        await process_achievement(update, user_id, 'mind', 'chinese', 20, "китайский язык (2 часа)")
     
     elif user_input == "📝 Диссертация":
-        database.add_achievement(user_id, 'mind', 'thesis', 10)
-        await send_achievement_response(update, user_id, "страницу диссертации", 10)
+        await process_achievement(update, user_id, 'mind', 'thesis', 10, "страницу диссертации")
     
     elif user_input == "← Назад":
         await start(update, context)
@@ -193,6 +190,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif user_input == "💰 Общий итог за месяц":
         await show_month_total(update, user_id)
 
+async def process_achievement(update: Update, user_id: int, category: str, achievement_type: str, points: int, achievement_name: str):
+    """Обработать достижение и отправить два сообщения"""
+    today = date.today()
+    
+    # Сообщение 1: Подтверждение добавления баллов
+    challenge_day = database.get_challenge_day(user_id)
+    challenge_text = f"🎯 День {challenge_day}\n" if challenge_day else "🎯 Челендж завершен\n"
+    
+    achievement_message = f"🎉 За {achievement_name} +{points} баллов!\n{challenge_text}"
+    await update.message.reply_text(achievement_message)
+    
+    # Добавляем достижение в базу
+    database.add_achievement(user_id, category, achievement_type, points)
+    
+    # Небольшая пауза для лучшего UX
+    await asyncio.sleep(0.5)
+    
+    # Сообщение 2: Обновленный прогресс и предложение продолжить
+    progress_message, completed_count, total_goals = await get_daily_progress(user_id, today)
+    
+    if completed_count == total_goals:
+        # Все достижения выполнены
+        completion_message = (
+            f"{progress_message}\n\n"
+            f"🎊 Так держать, сегодня ты закрыл все достижения! 🎊\n"
+            f"Завтра - больше! 🦾"
+        )
+        await update.message.reply_text(completion_message)
+    else:
+        # Не все достижения выполнены - предлагаем продолжить
+        continue_message = (
+            f"{progress_message}\n\n"
+            f"Продолжай в том же духе! 💪\n"
+            f"Выбери следующее достижение:"
+        )
+        
+        keyboard = [
+            ['💪 Тело', '🧠 Разум', '🧘 Медитация'],
+            ['📊 Статистика', '← Назад']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text(continue_message, reply_markup=reply_markup)
+
 async def show_challenge_management(update: Update, user_id: int):
     """Показать меню управления челленджем"""
     challenge_day = database.get_challenge_day(user_id)
@@ -210,19 +250,6 @@ async def show_challenge_management(update: Update, user_id: int):
         keyboard = [['← Назад']]
     
     await show_menu(update, message, keyboard)
-
-async def send_achievement_response(update: Update, user_id: int, achievement_name: str, points: int):
-    """Отправить ответ о достижении и обновленный прогресс"""
-    today = date.today()
-    
-    challenge_day = database.get_challenge_day(user_id)
-    challenge_text = f"🎯 День {challenge_day}\n" if challenge_day else "🎯 Челендж завершен\n"
-    
-    achievement_message = f"🎉 За {achievement_name} +{points} баллов!\n{challenge_text}"
-    progress_message = await get_daily_progress(user_id, today)
-    
-    full_message = f"{achievement_message}\n{progress_message}"
-    await update.message.reply_text(full_message)
 
 async def show_stats_menu(update: Update, user_id: int):
     """Показать меню статистики"""
