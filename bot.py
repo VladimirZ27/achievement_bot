@@ -361,17 +361,31 @@ import threading
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        self.handle_request()
+    
+    def do_HEAD(self):
+        """Обработка HEAD запросов для health checks от Render"""
+        self.handle_request(head_only=True)
+    
+    def handle_request(self, head_only=False):
         if self.path == '/health' or self.path == '/':
             self.send_response(200)
             self.send_header('Content-type', 'text/plain; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
             self.end_headers()
-            self.wfile.write('Bot is running! ✅'.encode('utf-8'))
+            if not head_only:
+                self.wfile.write('Bot is running! ✅'.encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()
+            if not head_only:
+                self.wfile.write('404 Not Found'.encode('utf-8'))
     
     def log_message(self, format, *args):
         # Отключаем логирование запросов
+        # logger.info(f"HTTP запрос: {args}")
         pass
 
 def run_http_server():
@@ -404,49 +418,66 @@ def run_sync_bot():
     # Запускаем бота
     logger.info("Бот запущен! 🚀")
     
-    # Запускаем polling
+    # Запускаем polling с настройками для Render
     application.run_polling(
-        close_loop=False,  # Не закрываем event loop при остановке
-        stop_signals=[],   # Не обрабатываем сигналы остановки
-        drop_pending_updates=True
+        close_loop=False,
+        stop_signals=[],
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+        poll_interval=1.0,
+        timeout=30,
+        connect_timeout=30,
+        read_timeout=30,
+        write_timeout=30,
+        pool_timeout=30
     )
 
 def main():
     """Основная функция для запуска бота"""
-    max_retries = 5
+    logger.info("Запуск бота...")
+    
+    max_retries = 10
     retry_count = 0
     base_delay = 30
     
-    while retry_count < max_retries:
+    while True:
         try:
-            # Просто запускаем бота
             run_sync_bot()
             
         except Conflict as e:
             logger.warning(f"Конфликт: другой экземпляр бота уже запущен. Попытка {retry_count + 1}/{max_retries}")
             retry_count += 1
-            if retry_count < max_retries:
-                delay = base_delay * (2 ** retry_count)  # Экспоненциальная задержка
-                logger.info(f"Ждем {delay} секунд перед повторной попыткой...")
-                time.sleep(delay)
-            else:
+            if retry_count >= max_retries:
                 logger.error(f"Достигнуто максимальное количество попыток ({max_retries})")
-                break
+                logger.info("Перезапуск через 5 минут...")
+                time.sleep(300)  # Ждем 5 минут
+                retry_count = 0  # Сбрасываем счетчик
+                continue
+            
+            delay = min(base_delay * (2 ** retry_count), 300)  # Максимум 5 минут
+            logger.info(f"Ждем {delay} секунд перед повторной попыткой...")
+            time.sleep(delay)
                 
         except KeyboardInterrupt:
             logger.info("Бот остановлен пользователем")
             break
             
         except Exception as e:
-            logger.error(f"Критическая ошибка: {type(e).__name__}: {e}")
+            logger.error(f"Критическая ошибка: {type(e).__name__}: {str(e)[:200]}")
+            import traceback
+            logger.error(f"Трассировка: {traceback.format_exc()}")
+            
             retry_count += 1
-            if retry_count < max_retries:
-                delay = base_delay * (2 ** retry_count)
-                logger.info(f"Ждем {delay} секунд перед повторной попыткой...")
-                time.sleep(delay)
-            else:
+            if retry_count >= max_retries:
                 logger.error(f"Достигнуто максимальное количество попыток ({max_retries})")
-                break
+                logger.info("Перезапуск через 5 минут...")
+                time.sleep(300)
+                retry_count = 0
+                continue
+            
+            delay = min(base_delay * (2 ** retry_count), 300)
+            logger.info(f"Ждем {delay} секунд перед повторной попыткой...")
+            time.sleep(delay)
 
 if __name__ == '__main__':
     # Устанавливаем обработчик для корректного завершения
