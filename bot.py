@@ -7,14 +7,17 @@ import time
 from datetime import date, datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram.error import Conflict
+from telegram.error import Conflict, TimedOut, NetworkError
 import database
 import config
 
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -385,7 +388,6 @@ class HealthHandler(BaseHTTPRequestHandler):
     
     def log_message(self, format, *args):
         # Отключаем логирование запросов
-        # logger.info(f"HTTP запрос: {args}")
         pass
 
 def run_http_server():
@@ -405,8 +407,17 @@ def run_sync_bot():
     http_thread.start()
     logger.info("HTTP сервер запущен в отдельном потоке")
     
-    # Создаем приложение бота
-    application = Application.builder().token(config.BOT_TOKEN).build()
+    # Создаем приложение бота с настройкой соединения
+    application = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .connection_pool_size(8)
+        .pool_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+        .build()
+    )
     
     # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
@@ -415,69 +426,70 @@ def run_sync_bot():
     # Добавляем обработчик ошибок
     application.add_error_handler(error_handler)
     
-    # Запускаем бота
+    # Запускаем бота с параметрами для избежания конфликтов
     logger.info("Бот запущен! 🚀")
     
-    # Запускаем polling с настройками для Render
-    application.run_polling(
-        close_loop=False,
-        stop_signals=[],
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-        poll_interval=1.0,
-        timeout=30,
-        connect_timeout=30,
-        read_timeout=30,
-        write_timeout=30,
-        pool_timeout=30
-    )
+    try:
+        # Запускаем polling с параметрами
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+            poll_interval=0.5,  # Увеличиваем интервал
+            timeout=10,
+            close_loop=False
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в run_polling: {e}")
+        raise
 
 def main():
     """Основная функция для запуска бота"""
-    logger.info("Запуск бота...")
+    logger.info(f"Запуск бота на Render. PID: {os.getpid()}")
     
-    max_retries = 10
+    # Ждем перед стартом, чтобы предыдущий процесс мог завершиться
+    time.sleep(5)
+    
     retry_count = 0
-    base_delay = 30
+    max_retries = 5
     
-    while True:
+    while retry_count < max_retries:
         try:
+            logger.info(f"Попытка запуска бота #{retry_count + 1}")
             run_sync_bot()
             
         except Conflict as e:
-            logger.warning(f"Конфликт: другой экземпляр бота уже запущен. Попытка {retry_count + 1}/{max_retries}")
+            logger.warning(f"Конфликт обнаружен. Подождите 30 секунд...")
             retry_count += 1
-            if retry_count >= max_retries:
-                logger.error(f"Достигнуто максимальное количество попыток ({max_retries})")
-                logger.info("Перезапуск через 5 минут...")
-                time.sleep(300)  # Ждем 5 минут
-                retry_count = 0  # Сбрасываем счетчик
-                continue
-            
-            delay = min(base_delay * (2 ** retry_count), 300)  # Максимум 5 минут
-            logger.info(f"Ждем {delay} секунд перед повторной попыткой...")
-            time.sleep(delay)
+            if retry_count < max_retries:
+                wait_time = 30 * retry_count
+                logger.info(f"Ожидание {wait_time} секунд перед повторной попыткой...")
+                time.sleep(wait_time)
+            else:
+                logger.error("Достигнуто максимальное количество попыток")
+                break
                 
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"Сетевая ошибка: {e}. Перезапуск через 10 секунд...")
+            retry_count += 1
+            time.sleep(10)
+            
         except KeyboardInterrupt:
             logger.info("Бот остановлен пользователем")
             break
             
         except Exception as e:
-            logger.error(f"Критическая ошибка: {type(e).__name__}: {str(e)[:200]}")
+            logger.error(f"Неожиданная ошибка: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"Трассировка: {traceback.format_exc()}")
             
             retry_count += 1
-            if retry_count >= max_retries:
-                logger.error(f"Достигнуто максимальное количество попыток ({max_retries})")
-                logger.info("Перезапуск через 5 минут...")
-                time.sleep(300)
-                retry_count = 0
-                continue
-            
-            delay = min(base_delay * (2 ** retry_count), 300)
-            logger.info(f"Ждем {delay} секунд перед повторной попыткой...")
-            time.sleep(delay)
+            if retry_count < max_retries:
+                wait_time = 60 * retry_count
+                logger.info(f"Ожидание {wait_time} секунд перед повторной попыткой...")
+                time.sleep(wait_time)
+            else:
+                logger.error("Достигнуто максимальное количество попыток")
+                break
 
 if __name__ == '__main__':
     # Устанавливаем обработчик для корректного завершения
